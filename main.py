@@ -5,10 +5,10 @@ from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QLineEdit, QComboBox, QTextEdit, QCheckBox, QPushButton, 
     QTabWidget, QTableWidget, QTableWidgetItem, QSplitter, QMessageBox,
-    QGroupBox, QScrollArea, QGridLayout, QToolButton, QMenu, QAction
+    QGroupBox, QScrollArea, QGridLayout, QToolButton, QMenu
 )
 from PyQt6.QtCore import Qt, QSize
-from PyQt6.QtGui import QFont, QIcon, QColor
+from PyQt6.QtGui import QFont, QIcon, QColor, QAction
 from template_manager import TemplateManagerDialog
 from query_history import QueryHistoryDialog, QueryHistoryManager
 from data_visualizer import DataVisualizer

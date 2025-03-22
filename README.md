@@ -61,16 +61,3 @@ python main.py
 - Toggle favorite status for queries
 - Reuse queries from history
 
-## Implementation Notes
-
-- The application handles PostgreSQL table name placeholders (`{table_name}`) by properly quoting the table names
-- Table name validation ensures that a table name is provided when using placeholders
-- Query history is saved locally for easy access to frequently used queries
-- Templates are organized by database type for quick access
-
-## Future Enhancements
-
-- Chart visualization for numeric data
-- Export results to CSV/Excel
-- Advanced filtering and sorting of results
-- Connection management for multiple database profiles
