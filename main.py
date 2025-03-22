@@ -1,11 +1,16 @@
 import sys
 import json
 import requests
+import os
+import pathlib
+import logging
+from datetime import datetime
+from dotenv import load_dotenv
 from PyQt6.QtWidgets import (
     QApplication, QMainWindow, QWidget, QVBoxLayout, QHBoxLayout, 
     QLabel, QLineEdit, QComboBox, QTextEdit, QCheckBox, QPushButton, 
     QTabWidget, QTableWidget, QTableWidgetItem, QSplitter, QMessageBox,
-    QGroupBox, QScrollArea, QGridLayout, QToolButton, QMenu
+    QGroupBox, QScrollArea, QGridLayout, QToolButton, QMenu, QFileDialog
 )
 from PyQt6.QtCore import Qt, QSize
 from PyQt6.QtGui import QFont, QIcon, QColor, QAction
@@ -13,11 +18,50 @@ from template_manager import TemplateManagerDialog
 from query_history import QueryHistoryDialog, QueryHistoryManager
 from data_visualizer import DataVisualizer
 
+# Configure logging
+def setup_logging():
+    logs_dir = pathlib.Path("logs")
+    logs_dir.mkdir(exist_ok=True)
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    log_file = logs_dir / f"querybuilder_{timestamp}.log"
+    
+    # Configure logging
+    logging.basicConfig(
+        level=logging.INFO,
+        format='%(asctime)s - %(name)s - %(levelname)s - %(message)s',
+        handlers=[
+            logging.FileHandler(log_file),
+            logging.StreamHandler(sys.stdout)
+        ]
+    )
+    
+    # Create logger
+    logger = logging.getLogger("QueryBuilder")
+    logger.info(f"Log file created at: {log_file}")
+    return logger
+
+# Create logger
+logger = setup_logging()
+
 class QueryBuilder(QMainWindow):
     def __init__(self):
         super().__init__()
         self.setWindowTitle("Query Builder")
         self.setMinimumSize(1200, 800)
+        
+        logger.info("Initializing QueryBuilder application")
+        
+        parent_env_path = pathlib.Path(__file__).parent.parent / '.env'
+        if parent_env_path.exists():
+            load_dotenv(dotenv_path=parent_env_path)
+            logger.info(f"Loaded environment variables from: {parent_env_path}")
+        else:
+            load_dotenv() 
+            logger.info("Attempted to load environment variables from current directory")
+            
+        # Set API base URL with fallback to production URL if env var not found
+        self.api_base_url = os.getenv("VITE_API_URL", "https://querybuilder.vercel.app")
+        logger.info(f"API base URL set to: {self.api_base_url}")
         
         # Initialize state
         self.query = ""
@@ -131,8 +175,14 @@ class QueryBuilder(QMainWindow):
         templates_label = QLabel("Templates:")
         self.templates_button = QPushButton("Browse Templates")
         self.templates_button.clicked.connect(self.show_templates)
+        
+        # Add test query button
+        self.test_query_button = QPushButton("Load Test Query")
+        self.test_query_button.clicked.connect(self.load_test_query)
+        
         templates_layout.addWidget(templates_label)
         templates_layout.addWidget(self.templates_button)
+        templates_layout.addWidget(self.test_query_button)
         templates_layout.addStretch()
         query_layout.addLayout(templates_layout)
         
@@ -180,7 +230,7 @@ class QueryBuilder(QMainWindow):
         results_group = QGroupBox("Results")
         results_layout = QVBoxLayout(results_group)
         
-        # Use the DataVisualizer component instead of just a table
+        # Use the DataVisualizer component instead of a table
         self.data_visualizer = DataVisualizer()
         results_layout.addWidget(self.data_visualizer)
         
@@ -192,9 +242,25 @@ class QueryBuilder(QMainWindow):
         splitter.setSizes([500, 700])
         
         # Footer
+        footer_layout = QHBoxLayout()
         footer = QLabel("Designed and Built by Jonathan Young (iterating)")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        main_layout.addWidget(footer)
+        
+        # Add export logs button
+        self.export_logs_button = QPushButton("Export Logs")
+        self.export_logs_button.clicked.connect(self.export_logs)
+        
+        # Add test query button for troubleshooting
+        self.test_api_button = QPushButton("Test API")
+        self.test_api_button.clicked.connect(self.run_test_query)
+        
+        footer_layout.addWidget(self.export_logs_button)
+        footer_layout.addWidget(self.test_api_button)
+        footer_layout.addStretch()
+        footer_layout.addWidget(footer)
+        footer_layout.addStretch()
+        
+        main_layout.addLayout(footer_layout)
         
     def get_connection_placeholder(self):
         db_type = self.db_config["type"]
@@ -210,14 +276,17 @@ class QueryBuilder(QMainWindow):
         self.db_config["type"] = self.db_type_map[text]
         self.conn_input.setPlaceholderText(self.get_connection_placeholder())
         self.save_config()
+        logger.info(f"Database type changed to: {self.db_config['type']}")
     
     def on_table_name_changed(self, text):
         self.db_config["tableName"] = text
         self.save_config()
+        logger.info(f"Table name changed to: {self.db_config['tableName']}")
     
     def on_connection_changed(self, text):
         self.db_config["url"] = text
         self.save_config()
+        logger.info(f"Connection string updated")
     
     def on_query_changed(self):
         self.query = self.query_editor.toPlainText()
@@ -235,6 +304,7 @@ class QueryBuilder(QMainWindow):
     def handle_query_submit(self):
         if not self.query.strip():
             QMessageBox.warning(self, "Empty Query", "Please enter a query to execute.")
+            logger.warning("Query submission attempted with empty query")
             return
         
         # Check if query contains {table_name} but no tableName is set
@@ -244,7 +314,11 @@ class QueryBuilder(QMainWindow):
                 "Table Name Required", 
                 "Table name is required when using {table_name} placeholders."
             )
+            logger.warning("Query with {table_name} placeholder attempted without table name set")
             return
+        
+        logger.info(f"Executing query for database type: {self.db_config['type']}")
+        logger.info(f"Read-only mode: {self.read_only}")
         
         self.loading = True
         self.run_button.setEnabled(False)
@@ -255,15 +329,17 @@ class QueryBuilder(QMainWindow):
         self.data_visualizer.set_data(None)
         
         try:
-            # In a real implementation, we would call the API
-            # For now, we'll use a mock implementation
+            # Execute the query via API
             self.execute_query()
             
-            # Save successful query to history
-            history_manager = QueryHistoryManager()
-            history_manager.add_query(self.query, self.db_config["type"])
+            # Only save to history if no error occurred
+            if not self.error:
+                history_manager = QueryHistoryManager()
+                history_manager.add_query(self.query, self.db_config["type"])
+                logger.info("Query executed successfully and saved to history")
         except Exception as e:
             self.error = str(e)
+            logger.error(f"Error executing query: {self.error}", exc_info=True)
             QMessageBox.critical(self, "Query Error", f"Error executing query: {self.error}")
         finally:
             self.loading = False
@@ -271,45 +347,74 @@ class QueryBuilder(QMainWindow):
             self.run_button.setText("Run Query")
     
     def execute_query(self):
-        """
-        Execute the query by calling the backend API
-        """
         try:
-            # In a real implementation, this would be an API call
-            # For demonstration, we'll use a direct request to the API
-            api_url = "http://localhost:3000/api/queries/execute"
+            # Process query for PostgreSQL table name substitution
+            processed_query = self.query
+            if self.db_config["type"] == "postgres" and "{table_name}" in self.query:
+                # PostgreSQL doesn't support curly brace syntax directly
+                # Replace {table_name} with properly quoted table name
+                table_name = self.db_config.get("tableName", "")
+                processed_query = self.query.replace("{table_name}", f'"{table_name}"')
+                logger.info(f"Processed PostgreSQL query with table name substitution: {table_name}")
             
-            # Extract readOnly flag from dbConfig
+            # API endpoint for query execution
+            api_url = f"{self.api_base_url}/api/queries/execute"
+            logger.info(f"Sending request to API: {api_url}")
+            
+            # Prepare the database configuration to send
             config_to_send = self.db_config.copy()
             
             # Prepare the request payload
             payload = {
-                "query": self.query,
+                "query": processed_query,
                 "dbConfig": config_to_send,
                 "readOnly": self.read_only
             }
             
-            # Make the API request
-            response = requests.post(api_url, json=payload)
+            # Make the API request with proper headers
+            headers = {
+                "Content-Type": "application/json",
+                "Accept": "application/json"
+            }
+            
+            # Log the request for debugging
+            logger.debug(f"Request payload: {json.dumps(payload, indent=2)}")
+            
+            # Add more detailed logging
+            logger.info(f"Sending request to: {api_url}")
+            logger.info(f"Payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+            logger.info(f"API response status code: {response.status_code}")
+            
+            # Log full response for debugging
+            logger.info(f"API response headers: {dict(response.headers)}")
+            logger.info(f"API response content: {response.text[:500]}...")  # Log first 500 chars to avoid huge logs
             
             if response.status_code == 200:
                 data = response.json()
+                logger.info(f"Query returned {len(data.get('data', [])) if isinstance(data, dict) and 'data' in data else 0} results")
+                logger.info(f"Response data type: {type(data)}")
+                if isinstance(data, dict):
+                    logger.info(f"Response data keys: {list(data.keys())}")
                 self.display_results(data)
             else:
                 error_message = f"API Error ({response.status_code}): {response.text}"
+                logger.error(f"API error: {error_message}")
                 self.error = error_message
                 QMessageBox.critical(self, "API Error", error_message)
                 
         except requests.RequestException as e:
             error_message = f"Connection Error: {str(e)}"
+            logger.error(f"Connection error: {error_message}", exc_info=True)
             self.error = error_message
             QMessageBox.critical(self, "Connection Error", error_message)
             
             # For demonstration purposes, show mock data when API is not available
+            logger.info("Showing mock data due to connection error")
             self.display_mock_results()
     
     def display_mock_results(self):
-        """Display mock results for demonstration purposes"""
         mock_data = [
             {"id": 1, "name": "Sample 1", "value": 100},
             {"id": 2, "name": "Sample 2", "value": 200},
@@ -318,31 +423,51 @@ class QueryBuilder(QMainWindow):
         self.display_results(mock_data)
     
     def display_results(self, data):
-        """Display query results in the table view"""
-        if not data or not isinstance(data, list) or len(data) == 0:
+        logger.info(f"display_results received data of type: {type(data)}")
+        
+        # Handle different response formats
+        if isinstance(data, dict) and 'data' in data:
+            # API might return data in a nested 'data' field
+            logger.info("Extracting data from 'data' field in response")
+            actual_data = data['data']
+        else:
+            actual_data = data
+            
+        # Check if we have valid data to display
+        if not actual_data or (isinstance(actual_data, list) and len(actual_data) == 0):
             self.data_visualizer.set_data(None)
+            logger.info("Query executed successfully but returned no data")
             QMessageBox.information(self, "Query Result", "Query executed successfully, but returned no data.")
             return
         
         # Use the data visualizer to display the results
-        self.data_visualizer.set_data(data)
+        logger.info(f"Sending data to visualizer: {type(actual_data)}, sample: {str(actual_data)[:200]}...")
+        self.data_visualizer.set_data(actual_data)
+        
+        # Calculate row count based on data type
+        if isinstance(actual_data, list):
+            row_count = len(actual_data)
+        elif isinstance(actual_data, dict):
+            row_count = 1
+        else:
+            row_count = 0
+            
+        logger.info(f"Displayed {row_count} rows of data in the visualizer")
         
         # Show success message
         QMessageBox.information(
             self, 
             "Query Success", 
-            f"Query executed successfully. Returned {len(data)} rows."
+            f"Query executed successfully. Returned {row_count} rows."
         )
     
     def show_templates(self):
-        """Show the template manager dialog"""
         db_type = self.db_config["type"]
         dialog = TemplateManagerDialog(db_type, self)
         dialog.template_selected.connect(self.apply_template)
         dialog.exec()
     
     def apply_template(self, template):
-        """Apply the selected template to the query editor"""
         # Convert query to string if it's an object/array
         query_string = template["query"]
         if not isinstance(query_string, str):
@@ -363,18 +488,15 @@ class QueryBuilder(QMainWindow):
                     break
     
     def show_history(self):
-        """Show the query history dialog"""
         dialog = QueryHistoryDialog(self)
         dialog.query_selected.connect(self.apply_history_query)
         dialog.exec()
     
     def apply_history_query(self, query):
-        """Apply a query from history"""
         self.query_editor.setPlainText(query)
         self.query = query
     
     def save_query(self):
-        """Save the current query to history"""
         if not self.query.strip():
             QMessageBox.warning(self, "Empty Query", "Please enter a query to save.")
             return
@@ -384,6 +506,117 @@ class QueryBuilder(QMainWindow):
         history_manager.add_query(self.query, self.db_config["type"])
         
         QMessageBox.information(self, "Save Query", "Query saved to history successfully!")
+    
+    def load_test_query(self):
+        if self.db_config["type"] == "postgres":
+            # Simple query to test PostgreSQL connection
+            test_query = "SELECT current_database() as database, current_user as user, version() as version;"
+        elif self.db_config["type"] == "mysql":
+            test_query = "SELECT database() as database, user() as user, version() as version;"
+        elif self.db_config["type"] == "mongodb":
+            test_query = "{ find: 'system.version', limit: 1 }"
+        else:
+            test_query = "-- Please select a database type"
+            
+        self.query_editor.setPlainText(test_query)
+        self.query = test_query
+        logger.info(f"Loaded test query for {self.db_config['type']}")
+        
+    def export_logs(self):
+        try:
+            logs_dir = pathlib.Path("logs")
+            if logs_dir.exists() and any(logs_dir.iterdir()):
+                # Get the most recent log file
+                log_files = sorted(logs_dir.glob("*.log"), key=lambda x: x.stat().st_mtime, reverse=True)
+                if log_files:
+                    latest_log = log_files[0]
+                    
+                    # Ask user where to save the log file
+                    file_dialog = QFileDialog()
+                    save_path, _ = file_dialog.getSaveFileName(
+                        self, 
+                        "Save Log File", 
+                        f"querybuilder_log_{datetime.now().strftime('%Y%m%d')}.log",
+                        "Log Files (*.log);;All Files (*)"
+                    )
+                    
+                    if save_path:
+                        # Copy the log file to the selected location
+                        with open(latest_log, 'r') as src, open(save_path, 'w') as dst:
+                            dst.write(src.read())
+                        logger.info(f"Exported log file to: {save_path}")
+                        QMessageBox.information(self, "Log Export", f"Log file exported to: {save_path}")
+                else:
+                    QMessageBox.warning(self, "No Logs", "No log files found to export.")
+            else:
+                QMessageBox.warning(self, "No Logs", "No log files found to export.")
+        except Exception as e:
+            logger.error(f"Error exporting logs: {str(e)}", exc_info=True)
+            QMessageBox.critical(self, "Export Error", f"Error exporting logs: {str(e)}")
+            
+    def run_test_query(self):
+        logger.info("Running test query to troubleshoot API responses")
+        
+        # Simple test query
+        test_query = "SELECT 1 as test"
+        
+        # Set up a basic configuration
+        test_config = {
+            "type": "postgres",
+            "url": "",  
+            "tableName": ""
+        }
+        
+        # API endpoint for query execution
+        api_url = f"{self.api_base_url}/api/queries/execute"
+        logger.info(f"Sending test request to API: {api_url}")
+        
+        # Prepare the request payload
+        payload = {
+            "query": test_query,
+            "dbConfig": test_config,
+            "readOnly": True
+        }
+        
+        # Make the API request with proper headers
+        headers = {
+            "Content-Type": "application/json",
+            "Accept": "application/json"
+        }
+        
+        try:
+            # Log the request for debugging
+            logger.info(f"Test payload: {json.dumps(payload, indent=2)}")
+            
+            response = requests.post(api_url, json=payload, headers=headers, timeout=30)
+            logger.info(f"Test API response status code: {response.status_code}")
+            
+            # Log full response for debugging
+            logger.info(f"Test API response headers: {dict(response.headers)}")
+            logger.info(f"Test API response content (full): {response.text}")
+            
+            if response.status_code == 200:
+                data = response.json()
+                logger.info(f"Test query response data type: {type(data)}")
+                logger.info(f"Test query response data: {data}")
+                
+                if isinstance(data, dict):
+                    logger.info(f"Test query response data keys: {list(data.keys())}")
+                    
+                QMessageBox.information(
+                    self,
+                    "Test Query Result",
+                    f"Test query executed successfully. Check logs for details."
+                )
+            else:
+                error_message = f"API Error ({response.status_code}): {response.text}"
+                logger.error(f"Test API error: {error_message}")
+                QMessageBox.critical(self, "Test API Error", error_message)
+                
+        except Exception as e:
+            error_message = f"Test Connection Error: {str(e)}"
+            logger.error(f"Test connection error: {error_message}", exc_info=True)
+            QMessageBox.critical(self, "Test Connection Error", error_message)
 
 
 def main():

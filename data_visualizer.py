@@ -21,7 +21,6 @@ class MplCanvas(FigureCanvas):
 
 
 class DataVisualizer(QWidget):
-    """Widget for visualizing query results as tables and charts"""
     def __init__(self, parent=None):
         super().__init__(parent)
         self.data = None
@@ -90,37 +89,35 @@ class DataVisualizer(QWidget):
         self.tabs.setTabEnabled(1, False)
         
     def on_view_changed(self, index):
-        """Handle view selector change"""
         self.tabs.setCurrentIndex(index)
         
     def set_data(self, data):
-        """Set the data to visualize"""
-        self.data = data
+        # Handle the API response format which returns data in a 'data' field
+        if isinstance(data, dict) and 'data' in data:
+            self.data = data['data']
+        else:
+            self.data = data
         
-        if not data or not isinstance(data, list) or len(data) == 0:
+        if not self.data or not isinstance(self.data, list) or len(self.data) == 0:
             self.clear_views()
-            self.row_count_label.setText("0 rows")
             return
             
-        # Update row count
-        self.row_count_label.setText(f"{len(data)} rows")
-        
         # Convert to pandas DataFrame for easier manipulation
-        self.df = pd.DataFrame(data)
+        self.df = pd.DataFrame(self.data)
+        
+        # Update row count label
+        self.row_count_label.setText(f"{len(self.data)} rows")
         
         # Update table view
         self.update_table()
         
-        # Check if we have numeric columns for charts
-        numeric_columns = self.df.select_dtypes(include=['number']).columns.tolist()
+        # Update chart axes options
+        self.update_axis_selectors()
         
-        if len(numeric_columns) > 0:
+        # Update chart if we have numeric columns
+        numeric_columns = self.df.select_dtypes(include=['number']).columns.tolist()
+        if len(numeric_columns) >= 2:
             self.tabs.setTabEnabled(1, True)
-            
-            # Update axis selectors
-            self.update_axis_selectors()
-            
-            # Update chart
             self.update_chart()
         else:
             self.tabs.setTabEnabled(1, False)
@@ -214,65 +211,72 @@ class DataVisualizer(QWidget):
         x_column = self.x_axis.currentText()
         y_column = self.y_axis.currentText()
         
+        # Validate that columns exist in the DataFrame
         if not x_column or not y_column:
+            return
+            
+        # Check if the selected columns exist in the DataFrame
+        if x_column not in self.df.columns or y_column not in self.df.columns:
+            # Log the error and return
+            print(f"Error: Selected columns {x_column}, {y_column} not found in DataFrame with columns {list(self.df.columns)}")
             return
             
         # Clear previous chart
         self.canvas.axes.clear()
         
-        # Create chart based on type
-        if chart_type == "Bar Chart":
-            self.df.plot(
-                kind='bar', 
-                x=x_column, 
-                y=y_column, 
-                ax=self.canvas.axes,
-                legend=True
-            )
-        elif chart_type == "Line Chart":
-            self.df.plot(
-                kind='line', 
-                x=x_column, 
-                y=y_column, 
-                ax=self.canvas.axes,
-                legend=True
-            )
-        elif chart_type == "Scatter Plot":
-            self.df.plot(
-                kind='scatter', 
-                x=x_column, 
-                y=y_column, 
-                ax=self.canvas.axes,
-                legend=True
-            )
-        elif chart_type == "Pie Chart":
-            # For pie charts, we need to ensure values are positive
-            if (self.df[y_column] >= 0).all():
-                self.df.plot(
-                    kind='pie',
-                    y=y_column,
-                    labels=self.df[x_column],
-                    ax=self.canvas.axes,
-                    legend=False,
-                    autopct='%1.1f%%'
+        try:
+            # Create chart based on type
+            if chart_type == "Bar Chart":
+                # Use matplotlib directly instead of pandas plot
+                self.canvas.axes.bar(
+                    self.df[x_column].astype(str),
+                    self.df[y_column]
                 )
-            else:
-                self.canvas.axes.text(
-                    0.5, 0.5, 
-                    "Cannot create pie chart with negative values",
-                    horizontalalignment='center',
-                    verticalalignment='center'
+                self.canvas.axes.set_xlabel(x_column)
+                self.canvas.axes.set_ylabel(y_column)
+            elif chart_type == "Line Chart":
+                self.canvas.axes.plot(
+                    self.df[x_column],
+                    self.df[y_column]
                 )
-        
-        # Set title and labels
-        self.canvas.axes.set_title(f"{y_column} by {x_column}")
-        if chart_type != "Pie Chart":
-            self.canvas.axes.set_xlabel(x_column)
-            self.canvas.axes.set_ylabel(y_column)
-        
-        # Adjust layout and redraw
-        self.canvas.fig.tight_layout()
-        self.canvas.draw()
+                self.canvas.axes.set_xlabel(x_column)
+                self.canvas.axes.set_ylabel(y_column)
+            elif chart_type == "Scatter Plot":
+                self.canvas.axes.scatter(
+                    self.df[x_column],
+                    self.df[y_column]
+                )
+                self.canvas.axes.set_xlabel(x_column)
+                self.canvas.axes.set_ylabel(y_column)
+            elif chart_type == "Pie Chart":
+                # For pie charts, we need to ensure values are positive
+                if (self.df[y_column] >= 0).all():
+                    # Group by x_column and sum y_column values
+                    pie_data = self.df.groupby(x_column)[y_column].sum()
+                    self.canvas.axes.pie(
+                        pie_data,
+                        labels=pie_data.index,
+                        autopct='%1.1f%%'
+                    )
+            
+            # Set title
+            self.canvas.axes.set_title(f"{y_column} by {x_column}")
+            
+            # Adjust layout and redraw
+            self.canvas.fig.tight_layout()
+            self.canvas.draw()
+            
+        except Exception as e:
+            print(f"Error creating chart: {str(e)}")
+            # Create a simple text message on the chart
+            self.canvas.axes.text(
+                0.5, 0.5, 
+                f"Could not create chart: {str(e)}", 
+                horizontalalignment='center',
+                verticalalignment='center',
+                transform=self.canvas.axes.transAxes
+            )
+            self.canvas.draw()
 
 
 # Test the component if run directly
