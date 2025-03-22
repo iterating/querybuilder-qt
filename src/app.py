@@ -207,7 +207,7 @@ class QueryBuilder(QMainWindow):
         
         # Footer
         footer_layout = QHBoxLayout()
-        footer = QLabel("Designed and Built by Jonathan Young (iterating)")
+        footer = QLabel("Designed and Built by <a href='https://github.com/iterating'>Jonathan Young</a>")
         footer.setAlignment(Qt.AlignmentFlag.AlignCenter)
         
         # Add export logs button
