@@ -1,0 +1,3 @@
+@echo off
+echo Starting Query Builder...
+python main.py
